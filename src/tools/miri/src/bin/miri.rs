@@ -81,7 +81,7 @@ fn entry_fn(tcx: TyCtxt<'_>) -> (DefId, MiriEntryFnType) {
     let sym = tcx.exported_symbols(LOCAL_CRATE).iter().find_map(|(sym, _)| {
         if sym.symbol_name_for_local_instance(tcx).name == "miri_start" { Some(sym) } else { None }
     });
-    if let Some(ExportedSymbol::NonGeneric(id)) = sym {
+    if let Some(ExportedSymbol::NonGeneric { def_id: id, .. }) = sym {
         let start_def_id = id.expect_local();
         let start_span = tcx.def_span(start_def_id);
 
@@ -265,7 +265,7 @@ impl rustc_driver::Callbacks for MiriBeRustCompilerCalls {
                                 || codegen_fn_attrs.flags.contains(CodegenFnAttrFlags::USED_LINKER)
                             {
                                 Some((
-                                    ExportedSymbol::NonGeneric(local_def_id.to_def_id()),
+                                    ExportedSymbol::NonGeneric { def_id: local_def_id.to_def_id(), cgu: None },
                                     // Some dummy `SymbolExportInfo` here. We only use
                                     // `exported_symbols` in shims/foreign_items.rs and the export info
                                     // is ignored.
