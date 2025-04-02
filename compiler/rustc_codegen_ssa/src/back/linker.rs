@@ -1841,7 +1841,7 @@ pub(crate) fn linked_objects(
                 exported_symbols
                     .filter(|(symbol, _)| match symbol {
                         ExportedSymbol::NonGeneric { cgu, .. } => cgu.is_none(),
-                        ExportedSymbol::Generic(..)
+                        ExportedSymbol::Generic { .. }
                         | ExportedSymbol::DropGlue(..)
                         | ExportedSymbol::AsyncDropGlueCtorShim(..) => false,
                         ExportedSymbol::ThreadLocalShim(_def_id) => false,
@@ -1875,8 +1875,12 @@ pub(crate) fn linked_objects(
                         info.kind,
                     ));
                 }
-                ExportedSymbol::Generic(..)
-                | ExportedSymbol::DropGlue(..)
+                ExportedSymbol::Generic { cgu, .. }  => {
+                    // if !lto {
+                        cgus.insert(cgu.as_str().to_string());
+                    // }
+                }
+                ExportedSymbol::DropGlue(..)
                 | ExportedSymbol::AsyncDropGlueCtorShim(..)
                 | ExportedSymbol::ThreadLocalShim(..) => {}
             };

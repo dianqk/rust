@@ -42,7 +42,7 @@ pub struct SymbolExportInfo {
 #[derive(Eq, PartialEq, Debug, Copy, Clone, TyEncodable, TyDecodable, HashStable)]
 pub enum ExportedSymbol<'tcx> {
     NonGeneric { def_id: DefId, cgu: Option<Symbol> },
-    Generic(DefId, GenericArgsRef<'tcx>),
+    Generic { def_id: DefId, args: GenericArgsRef<'tcx>, cgu: Symbol },
     DropGlue(Ty<'tcx>),
     AsyncDropGlueCtorShim(Ty<'tcx>),
     ThreadLocalShim(DefId),
@@ -57,7 +57,7 @@ impl<'tcx> ExportedSymbol<'tcx> {
             ExportedSymbol::NonGeneric { def_id, .. } => {
                 tcx.symbol_name(ty::Instance::mono(tcx, def_id))
             }
-            ExportedSymbol::Generic(def_id, args) => {
+            ExportedSymbol::Generic { def_id, args, .. } => {
                 tcx.symbol_name(ty::Instance::new(def_id, args))
             }
             ExportedSymbol::DropGlue(ty) => {

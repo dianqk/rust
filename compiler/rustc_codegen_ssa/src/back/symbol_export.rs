@@ -366,8 +366,9 @@ fn exported_symbols_provider_local(
         let cgus = tcx.collect_and_partition_mono_items(()).codegen_units;
 
         // The symbols created in this loop are sorted below it
+        for cgu in cgus.iter() {
         #[allow(rustc::potential_query_instability)]
-        for (mono_item, data) in cgus.iter().flat_map(|cgu| cgu.items().iter()) {
+        for (mono_item, data) in cgu.items().iter() {
             if data.linkage != Linkage::External {
                 // We can only re-use things with external linkage, otherwise
                 // we'll get a linker error
@@ -392,9 +393,9 @@ fn exported_symbols_provider_local(
             }
 
             match *mono_item {
-                MonoItem::Fn(Instance { def: InstanceKind::Item(def), args }) => {
+                MonoItem::Fn(Instance { def: InstanceKind::Item(def_id), args }) => {
                     if args.non_erasable_generics().next().is_some() {
-                        let symbol = ExportedSymbol::Generic(def, args);
+                        let symbol = ExportedSymbol::Generic { def_id, args, cgu: cgu.name() };
                         symbols.push((
                             symbol,
                             SymbolExportInfo {
@@ -437,6 +438,7 @@ fn exported_symbols_provider_local(
                 }
             }
         }
+        }
     }
 
     // Sort so we get a stable incr. comp. hash.
@@ -459,7 +461,7 @@ fn upstream_monomorphizations_provider(
     for &cnum in cnums.iter() {
         for (exported_symbol, _) in tcx.exported_symbols(cnum).iter() {
             let (def_id, args) = match *exported_symbol {
-                ExportedSymbol::Generic(def_id, args) => (def_id, args),
+                ExportedSymbol::Generic { def_id, args, .. } => (def_id, args),
                 ExportedSymbol::DropGlue(ty) => {
                     if let Some(drop_in_place_fn_def_id) = drop_in_place_fn_def_id {
                         (drop_in_place_fn_def_id, tcx.mk_args(&[ty.into()]))
@@ -597,7 +599,7 @@ pub(crate) fn symbol_name_for_instance_in_crate<'tcx>(
                 instantiating_crate,
             )
         }
-        ExportedSymbol::Generic(def_id, args) => {
+        ExportedSymbol::Generic { def_id, args, .. } => {
             rustc_symbol_mangling::symbol_name_for_instance_in_crate(
                 tcx,
                 Instance::new(def_id, args),
@@ -635,13 +637,13 @@ fn calling_convention_for_symbol<'tcx>(
     symbol: ExportedSymbol<'tcx>,
 ) -> (Conv, &'tcx [rustc_target::callconv::ArgAbi<'tcx, Ty<'tcx>>]) {
     let instance = match symbol {
-        ExportedSymbol::NonGeneric { def_id, .. } | ExportedSymbol::Generic(def_id, _)
+        ExportedSymbol::NonGeneric { def_id, .. } | ExportedSymbol::Generic { def_id, .. }
             if tcx.is_static(def_id) =>
         {
             None
         }
         ExportedSymbol::NonGeneric { def_id, .. } => Some(Instance::mono(tcx, def_id)),
-        ExportedSymbol::Generic(def_id, args) => Some(Instance::new(def_id, args)),
+        ExportedSymbol::Generic { def_id, args, .. } => Some(Instance::new(def_id, args)),
         // DropGlue always use the Rust calling convention and thus follow the target's default
         // symbol decoration scheme.
         ExportedSymbol::DropGlue(..) => None,
