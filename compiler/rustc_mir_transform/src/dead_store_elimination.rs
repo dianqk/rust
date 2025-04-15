@@ -12,16 +12,17 @@
 //!     will still not cause any further changes.
 //!
 
+use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::bug;
-use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::Analysis;
-use rustc_mir_dataflow::debuginfo::debuginfo_locals;
 use rustc_mir_dataflow::impls::{
     LivenessTransferFunction, MaybeTransitiveLiveLocals, borrowed_locals,
 };
 
+use crate::ssa::SsaLocals;
 use crate::util::is_within_packed;
 
 /// Performs the optimization on the body
@@ -33,7 +34,7 @@ fn eliminate<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
 
     // If the user requests complete debuginfo, mark the locals that appear in it as live, so
     // we don't remove assignments to them.
-    let mut always_live = debuginfo_locals(body);
+    let mut always_live = debuginfo_non_ssa_locals(tcx, body);
     always_live.union(&borrowed_locals);
 
     let mut live = MaybeTransitiveLiveLocals::new(&always_live)
@@ -150,5 +151,48 @@ impl<'tcx> crate::MirPass<'tcx> for DeadStoreElimination {
 
     fn is_required(&self) -> bool {
         false
+    }
+}
+
+/// Return the set of non-SSA locals that appear in debuginfo.
+fn debuginfo_non_ssa_locals<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> DenseBitSet<Local> {
+    let typing_env = body.typing_env(tcx);
+    let ssa = SsaLocals::new(tcx, body, typing_env);
+    let mut non_ssa_locals: DenseBitSet<Local> = DenseBitSet::new_empty(body.local_decls.len());
+    for (local, _) in body.local_decls.iter_enumerated() {
+        if !ssa.is_ssa(local) {
+            non_ssa_locals.insert(local);
+        }
+    }
+    let mut ref_locals_visitor = RefLocals(non_ssa_locals);
+    ref_locals_visitor.visit_body(body);
+    let non_ssa_locals = ref_locals_visitor.0;
+    let mut visitor = DebuginfoLocals(DenseBitSet::new_empty(body.local_decls.len()));
+    for debuginfo in body.var_debug_info.iter() {
+        visitor.visit_var_debug_info(debuginfo);
+    }
+    visitor.0.intersect(&non_ssa_locals);
+    visitor.0
+}
+
+struct RefLocals(DenseBitSet<Local>);
+
+impl Visitor<'_> for RefLocals {
+    fn visit_assign(&mut self, place: &Place<'_>, rvalue: &Rvalue<'_>, _: Location) {
+        // Even if we eliminate this statement, we can still calculate it in the debugging information,
+        // so let's keep it around for now as a non-SSA local.
+        if let Some(local) = place.as_local()
+            && matches!(rvalue, Rvalue::Ref(..))
+        {
+            self.0.insert(local);
+        }
+    }
+}
+
+struct DebuginfoLocals(DenseBitSet<Local>);
+
+impl Visitor<'_> for DebuginfoLocals {
+    fn visit_local(&mut self, local: Local, _: PlaceContext, _: Location) {
+        self.0.insert(local);
     }
 }
