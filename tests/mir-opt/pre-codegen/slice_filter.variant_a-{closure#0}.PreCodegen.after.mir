@@ -130,9 +130,7 @@ fn variant_a::{closure#0}(_1: &mut {closure@$DIR/slice_filter.rs:7:25: 7:39}, _2
     bb6: {
         StorageDead(_22);
         StorageDead(_21);
-        StorageLive(_23);
         Nop(Assign((_23, &_14)));
-        StorageLive(_24);
         Nop(Assign((_24, &_16)));
         StorageLive(_11);
         _11 = copy ((*_3).1: usize);
@@ -141,8 +139,6 @@ fn variant_a::{closure#0}(_1: &mut {closure@$DIR/slice_filter.rs:7:25: 7:39}, _2
         _0 = Le(move _11, move _12);
         StorageDead(_12);
         StorageDead(_11);
-        StorageDead(_24);
-        StorageDead(_23);
         goto -> bb7;
     }
 
