@@ -913,7 +913,7 @@ fn inline_call<'tcx, I: Inliner<'tcx>>(
         in_cleanup_block: false,
         return_block,
         tcx,
-        always_live_locals: DenseBitSet::new_filled(callee_body.local_decls.len()),
+        always_live_locals: always_live_locals(&callee_body),
     };
 
     // Map all `Local`s, `SourceScope`s and `BasicBlock`s to new ones
@@ -1392,4 +1392,19 @@ fn body_is_forwarder(body: &Body<'_>) -> bool {
                     | TerminatorKind::UnwindTerminate(_)
             )
     })
+}
+
+fn always_live_locals(body: &Body<'_>) -> DenseBitSet<Local> {
+    struct AlwaysLiveLocals(DenseBitSet<Local>);
+    impl<'tcx> Visitor<'tcx> for AlwaysLiveLocals {
+        fn visit_local(&mut self, local: Local, context: PlaceContext, _: Location) {
+            if context.is_use() {
+                self.0.insert(local);
+            }
+        }
+    }
+
+    let mut locals = AlwaysLiveLocals(DenseBitSet::new_empty(body.local_decls.len()));
+    locals.visit_body(body);
+    locals.0
 }

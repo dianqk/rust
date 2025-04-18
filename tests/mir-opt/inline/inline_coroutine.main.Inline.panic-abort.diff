@@ -96,8 +96,6 @@
 +     }
 + 
 +     bb8: {
-+         StorageLive(_8);
-+         StorageDead(_8);
 +         _1 = CoroutineState::<i32, bool>::Complete(copy _5);
 +         discriminant((*_6)) = 1;
 +         goto -> bb2;

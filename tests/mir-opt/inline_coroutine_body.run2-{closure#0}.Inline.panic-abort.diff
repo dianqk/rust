@@ -131,11 +131,8 @@
           _10 = deref_copy (_1.1: &mut std::task::Context<'_>);
           _9 = &mut (*_10);
 -         _7 = <{async fn body of ActionPermit<'_, T>::perform()} as Future>::poll(move _8, move _9) -> [return: bb3, unwind unreachable];
-+         StorageLive(_11);
-+         StorageLive(_15);
 +         StorageLive(_16);
 +         StorageLive(_25);
-+         StorageLive(_27);
 +         StorageLive(_30);
 +         StorageLive(_31);
 +         StorageLive(_32);
@@ -170,11 +167,8 @@
 +         StorageDead(_32);
 +         StorageDead(_31);
 +         StorageDead(_30);
-+         StorageDead(_27);
 +         StorageDead(_25);
 +         StorageDead(_16);
-+         StorageDead(_15);
-+         StorageDead(_11);
           StorageDead(_9);
           StorageDead(_8);
           StorageDead(_7);

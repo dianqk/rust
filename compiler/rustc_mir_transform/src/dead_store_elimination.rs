@@ -12,8 +12,9 @@
 //!     will still not cause any further changes.
 //!
 
+use rustc_index::IndexVec;
 use rustc_middle::bug;
-use rustc_middle::mir::visit::Visitor;
+use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::Analysis;
@@ -146,9 +147,50 @@ impl<'tcx> crate::MirPass<'tcx> for DeadStoreElimination {
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         eliminate(tcx, body);
+        eliminate_unused_storage_marker(body);
     }
 
     fn is_required(&self) -> bool {
         false
+    }
+}
+
+struct EliminateUnusedStorageMark {
+    storage_live_locals: IndexVec<Local, Option<usize>>,
+}
+
+impl<'tcx> Visitor<'tcx> for EliminateUnusedStorageMark {
+    fn visit_local(&mut self, local: Local, ctx: PlaceContext, _: Location) {
+        if ctx.is_use() {
+            self.storage_live_locals[local] = None;
+        }
+    }
+}
+
+fn eliminate_unused_storage_marker<'tcx>(body: &mut Body<'tcx>) {
+    let basic_blocks = body.basic_blocks.as_mut_preserves_cfg();
+    for (bb, data) in basic_blocks.iter_enumerated_mut() {
+        let mut unused_storage_mark = EliminateUnusedStorageMark {
+            storage_live_locals: IndexVec::from_elem_n(None, body.local_decls.len()),
+        };
+        for stmt_index in 0..data.statements.len() {
+            let loc = Location { block: bb, statement_index: stmt_index };
+            match data.statements[stmt_index].kind {
+                StatementKind::StorageLive(local) => {
+                    unused_storage_mark.storage_live_locals[local] = Some(stmt_index);
+                }
+                StatementKind::StorageDead(local)
+                    if let Some(live_stmt_index) =
+                        unused_storage_mark.storage_live_locals[local] =>
+                {
+                    data.statements[live_stmt_index].make_nop();
+                    data.statements[stmt_index].make_nop();
+                    unused_storage_mark.storage_live_locals[local] = None;
+                }
+                _ => {
+                    unused_storage_mark.visit_statement(&data.statements[stmt_index], loc);
+                }
+            }
+        }
     }
 }
