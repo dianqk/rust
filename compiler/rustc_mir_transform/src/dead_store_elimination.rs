@@ -101,7 +101,7 @@ fn eliminate<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 | StatementKind::ConstEvalCounter
                 | StatementKind::PlaceMention(_)
                 | StatementKind::BackwardIncompatibleDropHint { .. }
-                | StatementKind::Nop => {}
+                | StatementKind::Nop(_) => {}
 
                 StatementKind::FakeRead(_) | StatementKind::AscribeUserType(_, _) => {
                     bug!("{:?} not found in this MIR phase!", statement.kind)
@@ -116,7 +116,7 @@ fn eliminate<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
 
     let bbs = body.basic_blocks.as_mut_preserves_cfg();
     for Location { block, statement_index } in patch {
-        bbs[block].statements[statement_index].make_nop();
+        bbs[block].statements[statement_index].make_nop(false);
     }
     for (block, argument_index) in call_operands_to_move {
         let TerminatorKind::Call { ref mut args, .. } = bbs[block].terminator_mut().kind else {
@@ -183,8 +183,8 @@ fn eliminate_unused_storage_marker<'tcx>(body: &mut Body<'tcx>) {
                     if let Some(live_stmt_index) =
                         unused_storage_mark.storage_live_locals[local] =>
                 {
-                    data.statements[live_stmt_index].make_nop();
-                    data.statements[stmt_index].make_nop();
+                    data.statements[live_stmt_index].make_nop(false);
+                    data.statements[stmt_index].make_nop(false);
                     unused_storage_mark.storage_live_locals[local] = None;
                 }
                 _ => {
