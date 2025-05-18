@@ -29,7 +29,7 @@ fn all_copy_2(v: &&AllCopy) -> AllCopy {
     // CHECK-LABEL: fn all_copy_2(
     // CHECK: bb0: {
     // CHECK-NOT: = AllCopy { {{.*}} };
-    // CHECK: [[V1:_.*]] = copy (*_1);
+    // CHECK: [[V1:_.*]] = deref_copy (*_1);
     // CHECK: _0 = copy (*[[V1]]);
     let a = v.a;
     let b = v.b;

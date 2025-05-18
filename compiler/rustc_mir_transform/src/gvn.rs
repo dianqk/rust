@@ -845,7 +845,6 @@ impl<'body, 'tcx> VnState<'body, 'tcx> {
             Rvalue::CopyForDeref(place) => {
                 let mut operand = Operand::Copy(place);
                 let val = self.simplify_operand(&mut operand, location);
-                *rvalue = Rvalue::Use(operand);
                 return val;
             }
 

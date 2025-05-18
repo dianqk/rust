@@ -25,9 +25,8 @@
   
       bb0: {
 -         StorageLive(_2);
--         _8 = deref_copy (*_1);
 +         nop;
-+         _8 = copy (*_1);
+          _8 = deref_copy (*_1);
           _2 = copy ((*_8).0: i32);
 -         StorageLive(_3);
 -         _9 = deref_copy (*_1);
