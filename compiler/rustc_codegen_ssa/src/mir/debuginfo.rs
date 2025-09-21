@@ -259,7 +259,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         &self,
         bx: &mut Bx,
         local: mir::Local,
-        base: PlaceValue<Bx::Value>,
+        base: Bx::Value,
         layout: TyAndLayout<'tcx>,
         projection: &[mir::PlaceElem<'tcx>],
     ) {
@@ -285,7 +285,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
             bx.dbg_var_value(
                 dbg_var,
                 dbg_loc,
-                base.llval,
+                base,
                 direct_offset,
                 &indirect_offsets,
                 &var.fragment,
@@ -298,7 +298,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         let layout = bx.cx().layout_of(ty);
         let to_backend_ty = bx.cx().immediate_backend_type(layout);
         let place_ref = PlaceRef::new_sized(bx.cx().const_poison(to_backend_ty), layout);
-        self.debug_new_val_to_local(bx, local, place_ref.val, layout, &[]);
+        self.debug_new_val_to_local(bx, local, place_ref.val.llval, layout, &[]);
     }
 
     /// Apply debuginfo and/or name, after creating the `alloca` for a local,
