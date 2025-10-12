@@ -129,6 +129,7 @@ impl<'tcx> crate::MirPass<'tcx> for GVN {
         let ssa = SsaLocals::new(tcx, body, typing_env);
         // Clone dominators because we need them while mutating the body.
         let dominators = body.basic_blocks.dominators().clone();
+        let maybe_loop = !loops::maybe_loop_headers(body).is_empty();
 
         let arena = DroplessArena::default();
         let mut state =
@@ -141,6 +142,30 @@ impl<'tcx> crate::MirPass<'tcx> for GVN {
 
         let reverse_postorder = body.basic_blocks.reverse_postorder().to_vec();
         for bb in reverse_postorder {
+            // N.B. With loops, reverse postorder cannot produce a valid topological order.
+            // For instance, the RPO might be ['bb1', 'bb2', 'bb4', 'bb3'], but we cannot say b
+            // equals a because there is a path ['bb1', 'bb2', 'bb3', 'bb2', 'bb4'].
+            //             +------+
+            //             | bb1  |
+            //             | a=*x |
+            //             +------+
+            //               |
+            //               |
+            //               v
+            // +-----+     +------+
+            // | bb4 |     | bb2  |
+            // |     | <-- | b=*x | <+
+            // +-----+     +------+  |
+            //               |       |
+            //               |       |
+            //               v       |
+            //             +------+  |
+            //             | bb3  |  |
+            //             | *x=c | -+
+            //             +------+
+            if maybe_loop {
+                state.invalidate_derefs();
+            }
             let data = &mut body.basic_blocks.as_mut_preserves_cfg()[bb];
             state.visit_basic_block_data(bb, data);
         }
