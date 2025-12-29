@@ -42,10 +42,11 @@ pub fn array_len_by_value<const N: usize>(arr: [u8; N]) -> usize {
     arr.len()
 }
 
+// FIXME: _0 can be `const N`.
 // EMIT_MIR lower_array_len.array_len_reborrow.GVN.diff
 pub fn array_len_reborrow<const N: usize>(mut arr: [u8; N]) -> usize {
     // CHECK-LABEL: fn array_len_reborrow(
-    // CHECK: _0 = const N;
+    // CHECK: _0 = PtrMetadata
     let arr: &mut [_] = &mut arr;
     let arr = &*arr;
     arr.len()

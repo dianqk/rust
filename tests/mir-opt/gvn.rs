@@ -451,20 +451,21 @@ fn references(mut x: impl Sized) {
     // CHECK: opaque::<*mut impl Sized>(move [[ref8]])
     opaque(&raw mut x);
 
+    // FIXME: ReferencePropagation transform this pattern.
     let r = &mut x;
     let s = S(r).0; // Obfuscate `r`. Following lines should still reborrow `r`.
     // CHECK: [[ref9:_.*]] = &mut _1;
-    // CHECK: [[ref10:_.*]] = &(*[[ref9]]);
-    // CHECK: opaque::<&impl Sized>(move [[ref10]])
+    // COM: CHECK: [[ref10:_.*]] = &(*[[ref9]]);
+    // COM: CHECK: opaque::<&impl Sized>(move [[ref10]])
     opaque(&*s);
-    // CHECK: [[ref11:_.*]] = &mut (*[[ref9]]);
-    // CHECK: opaque::<&mut impl Sized>(move [[ref11]])
+    // COM: CHECK: [[ref11:_.*]] = &mut (*[[ref9]]);
+    // COM: CHECK: opaque::<&mut impl Sized>(move [[ref11]])
     opaque(&mut *s);
-    // CHECK: [[ref12:_.*]] = &raw const (*[[ref9]]);
-    // CHECK: opaque::<*const impl Sized>(move [[ref12]])
+    // COM: CHECK: [[ref12:_.*]] = &raw const (*[[ref9]]);
+    // COM: CHECK: opaque::<*const impl Sized>(move [[ref12]])
     opaque(&raw const *s);
-    // CHECK: [[ref12:_.*]] = &raw mut (*[[ref9]]);
-    // CHECK: opaque::<*mut impl Sized>(move [[ref12]])
+    // COM: CHECK: [[ref12:_.*]] = &raw mut (*[[ref9]]);
+    // COM: CHECK: opaque::<*mut impl Sized>(move [[ref12]])
     opaque(&raw mut *s);
 }
 
@@ -472,17 +473,21 @@ fn dereferences(t: &mut u32, u: &impl Copy, s: &S<u32>) {
     // CHECK-LABEL: fn dereferences(
 
     // Do not reuse dereferences of `&mut`.
+    // CHECK: bb0:
     // CHECK: [[st1:_.*]] = copy (*_1);
     // CHECK: opaque::<u32>(move [[st1]])
+    // CHECK: bb1:
     // CHECK: [[st2:_.*]] = copy (*_1);
     // CHECK: opaque::<u32>(move [[st2]])
     opaque(*t);
     opaque(*t);
 
     // Do not reuse dereferences of `*const`.
+    // CHECK: bb2:
     // CHECK: [[raw:_.*]] = &raw const (*_1);
     // CHECK: [[st3:_.*]] = copy (*[[raw]]);
     // CHECK: opaque::<u32>(move [[st3]])
+    // CHECK: bb3:
     // CHECK: [[st4:_.*]] = copy (*[[raw]]);
     // CHECK: opaque::<u32>(move [[st4]])
     let z = &raw const *t;
@@ -490,42 +495,49 @@ fn dereferences(t: &mut u32, u: &impl Copy, s: &S<u32>) {
     unsafe { opaque(*z) };
 
     // Do not reuse dereferences of `*mut`.
+    // CHECK: bb4:
     // CHECK: [[ptr:_.*]] = &raw mut (*_1);
     // CHECK: [[st5:_.*]] = copy (*[[ptr]]);
     // CHECK: opaque::<u32>(move [[st5]])
+    // CHECK: bb5:
     // CHECK: [[st6:_.*]] = copy (*[[ptr]]);
     // CHECK: opaque::<u32>(move [[st6]])
     let z = &raw mut *t;
     unsafe { opaque(*z) };
     unsafe { opaque(*z) };
 
-    // Do not reuse dereferences of `&Freeze`.
+    // CHECK: bb6:
     // CHECK: [[ref:_.*]] = &(*_1);
     // CHECK: [[st7:_.*]] = copy (*[[ref]]);
-    // CHECK: opaque::<u32>(move [[st7]])
-    // CHECK: [[st8:_.*]] = copy (*[[ref]]);
-    // CHECK: opaque::<u32>(move [[st8]])
+    // CHECK: opaque::<u32>(copy [[st7]])
+    // CHECK: bb7:
+    // CHECK: [[st8:_.*]] = copy [[st7]];
+    // CHECK: opaque::<u32>(copy [[st7]])
     let z = &*t;
     opaque(*z);
     opaque(*z);
     // Not in reborrows either.
+    // CHECK: bb8:
     // CHECK: [[reborrow:_.*]] = &(*[[ref]]);
     // CHECK: opaque::<&u32>(move [[reborrow]])
     opaque(&*z);
 
     // `*u` is not Freeze, so we cannot reuse.
+    // CHECK: bb9:
     // CHECK: [[st8:_.*]] = copy (*_2);
     // CHECK: opaque::<impl Copy>(move [[st8]])
+    // CHECK: bb10:
     // CHECK: [[st9:_.*]] = copy (*_2);
     // CHECK: opaque::<impl Copy>(move [[st9]])
     opaque(*u);
     opaque(*u);
 
-    // `*s` is not Copy, but `(*s).0` is, but we still cannot reuse.
+    // CHECK: bb11:
     // CHECK: [[st10:_.*]] = copy ((*_3).0: u32);
-    // CHECK: opaque::<u32>(move [[st10]])
-    // CHECK: [[st11:_.*]] = copy ((*_3).0: u32);
-    // CHECK: opaque::<u32>(move [[st11]])
+    // CHECK: opaque::<u32>(copy [[st10]])
+    // CHECK: bb12:
+    // CHECK: [[st11:_.*]] = copy [[st10]];
+    // CHECK: opaque::<u32>(copy [[st10]])
     opaque(s.0);
     opaque(s.0);
 }
@@ -1069,6 +1081,13 @@ fn dereference_indexing(array: [u8; 2], index: usize) {
     // CHECK: [[tmp:_.*]] = copy _1[[[i]]];
     // CHECK: opaque::<u8>(move [[tmp]])
     opaque(*a);
+}
+
+// EMIT_MIR gvn.dereference_reborrow.GVN.diff
+fn dereference_reborrow(mut_a: &mut u8) {
+    let a = &*mut_a;
+    let b = *a;
+    let c = *a;
 }
 
 // CHECK-LABEL: fn main(

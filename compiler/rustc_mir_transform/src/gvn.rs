@@ -135,7 +135,7 @@ impl<'tcx> crate::MirPass<'tcx> for GVN {
             VnState::new(tcx, body, typing_env, &ssa, dominators, &body.local_decls, &arena);
 
         for local in body.args_iter().filter(|&local| ssa.is_ssa(local)) {
-            let opaque = state.new_opaque(body.local_decls[local].ty);
+            let opaque = state.new_argument(body.local_decls[local].ty);
             state.assign(local, opaque);
         }
 
@@ -200,6 +200,7 @@ enum Value<'a, 'tcx> {
     /// Used to represent values we know nothing about.
     /// The `usize` is a counter incremented by `new_opaque`.
     Opaque(VnOpaque),
+    Argument(VnOpaque),
     /// Evaluated or unevaluated constant value.
     Constant {
         value: Const<'tcx>,
@@ -237,7 +238,10 @@ enum Value<'a, 'tcx> {
 
     // Extractions.
     /// This is the *value* obtained by projecting another value.
-    Projection(VnIndex, ProjectionElem<VnIndex, ()>),
+    Projection {
+        base: VnIndex,
+        elem: ProjectionElem<VnIndex, ()>,
+    },
     /// Discriminant of the given value.
     Discriminant(VnIndex),
 
@@ -284,7 +288,7 @@ impl<'a, 'tcx> ValueSet<'a, 'tcx> {
         let value = value(VnOpaque);
 
         debug_assert!(match value {
-            Value::Opaque(_) | Value::Address { .. } => true,
+            Value::Opaque(_) | Value::Argument(_) | Value::Address { .. } => true,
             Value::Constant { disambiguator, .. } => disambiguator.is_some(),
             _ => false,
         });
@@ -440,6 +444,13 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         index
     }
 
+    #[instrument(level = "trace", skip(self), ret)]
+    fn new_argument(&mut self, ty: Ty<'tcx>) -> VnIndex {
+        let index = self.insert_unique(ty, Value::Argument);
+        self.evaluated[index] = Some(None);
+        index
+    }
+
     /// Create a new `Value::Address` distinct from all the others.
     #[instrument(level = "trace", skip(self), ret)]
     fn new_pointer(&mut self, place: Place<'tcx>, kind: AddressKind) -> Option<VnIndex> {
@@ -458,6 +469,10 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             projection.next();
             AddressBase::Deref(base)
         } else {
+            // Only propagate the pointer of the SSA local.
+            if !self.ssa.is_ssa(place.local) {
+                return None;
+            }
             AddressBase::Local(place.local)
         };
         // Do not try evaluating inside `Index`, this has been done by `simplify_place_projection`.
@@ -526,10 +541,6 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         self.insert(ty, Value::Aggregate(VariantIdx::ZERO, self.arena.alloc_slice(values)))
     }
 
-    fn insert_deref(&mut self, ty: Ty<'tcx>, value: VnIndex) -> VnIndex {
-        self.insert(ty, Value::Projection(value, ProjectionElem::Deref))
-    }
-
     #[instrument(level = "trace", skip(self), ret)]
     fn eval_to_const_inner(&mut self, value: VnIndex) -> Option<OpTy<'tcx>> {
         use Value::*;
@@ -543,7 +554,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         let op = match self.get(value) {
             _ if ty.is_zst() => ImmTy::uninit(ty).into(),
 
-            Opaque(_) => return None,
+            Opaque(_) | Argument(_) => return None,
             // Keep runtime check constants as symbolic.
             RuntimeChecks(..) => return None,
 
@@ -625,7 +636,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                 ImmTy::from_immediate(ptr_imm, ty).into()
             }
 
-            Projection(base, elem) => {
+            Projection { base, elem, .. } => {
                 let base = self.eval_to_const(base)?;
                 // `Index` by constants should have been replaced by `ConstantIndex` by
                 // `simplify_place_projection`.
@@ -795,7 +806,13 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
 
                     // An immutable borrow `_x` always points to the same value for the
                     // lifetime of the borrow, so we can merge all instances of `*_x`.
-                    return Some((projection_ty, self.insert_deref(projection_ty.ty, value)));
+                    return Some((
+                        projection_ty,
+                        self.insert(
+                            projection_ty.ty,
+                            Value::Projection { base: value, elem: ProjectionElem::Deref },
+                        ),
+                    ));
                 } else {
                     return None;
                 }
@@ -804,8 +821,8 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             ProjectionElem::Field(f, _) => match self.get(value) {
                 Value::Aggregate(_, fields) => return Some((projection_ty, fields[f.as_usize()])),
                 Value::Union(active, field) if active == f => return Some((projection_ty, field)),
-                Value::Projection(outer_value, ProjectionElem::Downcast(_, read_variant))
-                    if let Value::Aggregate(written_variant, fields) = self.get(outer_value)
+                Value::Projection { base, elem: ProjectionElem::Downcast(_, read_variant) }
+                    if let Value::Aggregate(written_variant, fields) = self.get(base)
                     // This pass is not aware of control-flow, so we do not know whether the
                     // replacement we are doing is actually reachable. We could be in any arm of
                     // ```
@@ -858,7 +875,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             ProjectionElem::UnwrapUnsafeBinder(_) => ProjectionElem::UnwrapUnsafeBinder(()),
         };
 
-        let value = self.insert(projection_ty.ty, Value::Projection(value, proj));
+        let value = self.insert(projection_ty.ty, Value::Projection { base: value, elem: proj });
         Some((projection_ty, value))
     }
 
@@ -1091,11 +1108,14 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         fields: &[VnIndex],
     ) -> Option<VnIndex> {
         let Some(&first_field) = fields.first() else { return None };
-        let Value::Projection(copy_from_value, _) = self.get(first_field) else { return None };
+        let Value::Projection { base: copy_from_value, .. } = self.get(first_field) else {
+            return None;
+        };
 
         // All fields must correspond one-to-one and come from the same aggregate value.
         if fields.iter().enumerate().any(|(index, &v)| {
-            if let Value::Projection(pointer, ProjectionElem::Field(from_index, _)) = self.get(v)
+            if let Value::Projection { base: pointer, elem: ProjectionElem::Field(from_index, _) } =
+                self.get(v)
                 && copy_from_value == pointer
                 && from_index.index() == index
             {
@@ -1107,7 +1127,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         }
 
         let mut copy_from_local_value = copy_from_value;
-        if let Value::Projection(pointer, proj) = self.get(copy_from_value)
+        if let Value::Projection { base: pointer, elem: proj } = self.get(copy_from_value)
             && let ProjectionElem::Downcast(_, read_variant) = proj
         {
             if variant_index == read_variant {
@@ -1116,6 +1136,44 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             } else {
                 // The copied variant must be identical.
                 return None;
+            }
+        }
+
+        let mut copy_root = copy_from_local_value;
+        loop {
+            match self.get(copy_root) {
+                Value::Projection { base, .. } => {
+                    copy_root = base;
+                }
+                Value::Address {
+                    base,
+                    projection,
+                    kind: AddressKind::Ref(BorrowKind::Shared),
+                    ..
+                } if projection.iter().all(ProjectionElem::is_stable_offset) => match base {
+                    AddressBase::Local(local) => {
+                        if !self.ssa.is_ssa(local) {
+                            return None;
+                        }
+                        break;
+                    }
+                    AddressBase::Deref(index) => {
+                        copy_root = index;
+                    }
+                },
+                Value::Argument(_) if !self.ty(copy_root).is_mutable_ptr() => {
+                    break;
+                }
+                Value::Opaque(_) => {
+                    let ty = self.ty(copy_root);
+                    if ty.is_fn() || !ty.is_any_ptr() {
+                        break;
+                    }
+                    return None;
+                }
+                _ => {
+                    return None;
+                }
             }
         }
 
@@ -1820,7 +1878,7 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
                 // If we are here, we failed to find a local, and we already have a `Deref`.
                 // Trying to add projections will only result in an ill-formed place.
                 return None;
-            } else if let Value::Projection(pointer, proj) = self.get(index)
+            } else if let Value::Projection { base: pointer, elem: proj } = self.get(index)
                 && (allow_complex_projection || proj.is_stable_offset())
                 && let Some(proj) = self.try_as_place_elem(self.ty(index), proj, loc)
             {
@@ -1879,9 +1937,31 @@ impl<'tcx> MutVisitor<'tcx> for VnState<'_, '_, 'tcx> {
             }
         }
 
+        let rvalue_ty = rvalue.ty(self.local_decls, self.tcx);
+        // DO NOT insert the pointer if it may point to a non-SSA local.
+        if rvalue_ty.is_ref() {
+            if let Some(value) = value {
+                let value = self.get(value);
+                match value {
+                    Value::Opaque(_) | Value::Projection { .. } => {
+                        return;
+                    }
+                    Value::Constant { .. } | Value::Address { .. } | Value::Argument(_) => {}
+                    Value::RawPtr { .. } | Value::BinaryOp(..) | Value::Cast { .. } => {}
+                    Value::Aggregate(..)
+                    | Value::Union(..)
+                    | Value::Repeat(..)
+                    | Value::Discriminant(..)
+                    | Value::RuntimeChecks(..)
+                    | Value::UnaryOp(..) => unreachable!(),
+                }
+            } else {
+                return;
+            }
+        }
+
         if let Some(local) = lhs.as_local()
             && self.ssa.is_ssa(local)
-            && let rvalue_ty = rvalue.ty(self.local_decls, self.tcx)
             // FIXME(#112651) `rvalue` may have a subtype to `local`. We can only mark
             // `local` as reusable if we have an exact type match.
             && self.local_decls[local].ty == rvalue_ty

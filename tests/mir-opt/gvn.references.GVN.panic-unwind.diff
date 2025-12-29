@@ -112,24 +112,19 @@
       bb8: {
           StorageDead(_17);
           StorageDead(_16);
--         StorageLive(_18);
-+         nop;
+          StorageLive(_18);
           _18 = &mut _1;
           StorageLive(_19);
           StorageLive(_20);
           StorageLive(_21);
--         _21 = move _18;
--         _20 = S::<&mut impl Sized>(move _21);
-+         _21 = copy _18;
-+         _20 = S::<&mut impl Sized>(copy _18);
+          _21 = move _18;
+          _20 = S::<&mut impl Sized>(move _21);
           StorageDead(_21);
--         _19 = move (_20.0: &mut impl Sized);
-+         _19 = copy _18;
+          _19 = move (_20.0: &mut impl Sized);
           StorageDead(_20);
           StorageLive(_22);
           StorageLive(_23);
--         _23 = &(*_19);
-+         _23 = &(*_18);
+          _23 = &(*_19);
           _22 = opaque::<&impl Sized>(move _23) -> [return: bb9, unwind: bb14];
       }
   
@@ -138,8 +133,7 @@
           StorageDead(_22);
           StorageLive(_24);
           StorageLive(_25);
--         _25 = &mut (*_19);
-+         _25 = &mut (*_18);
+          _25 = &mut (*_19);
           _24 = opaque::<&mut impl Sized>(move _25) -> [return: bb10, unwind: bb14];
       }
   
@@ -148,8 +142,7 @@
           StorageDead(_24);
           StorageLive(_26);
           StorageLive(_27);
--         _27 = &raw const (*_19);
-+         _27 = &raw const (*_18);
+          _27 = &raw const (*_19);
           _26 = opaque::<*const impl Sized>(move _27) -> [return: bb11, unwind: bb14];
       }
   
@@ -158,8 +151,7 @@
           StorageDead(_26);
           StorageLive(_28);
           StorageLive(_29);
--         _29 = &raw mut (*_19);
-+         _29 = &raw mut (*_18);
+          _29 = &raw mut (*_19);
           _28 = opaque::<*mut impl Sized>(move _29) -> [return: bb12, unwind: bb14];
       }
   
@@ -168,8 +160,7 @@
           StorageDead(_28);
           _0 = const ();
           StorageDead(_19);
--         StorageDead(_18);
-+         nop;
+          StorageDead(_18);
           drop(_1) -> [return: bb13, unwind: bb15];
       }
   
