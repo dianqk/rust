@@ -774,7 +774,7 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
                 "Cannot match `{dest_ty:?}` (expected) with {src_ty:?} (found) in `{fn_ptr:?}"
             );
 
-            *arg = autocast(self, fn_ptr, arg, src_ty, dest_ty, true);
+            *arg = autocast(self, arg, src_ty, dest_ty);
         }
 
         let llret = unsafe {
@@ -797,7 +797,7 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
             "Cannot match `{src_ty:?}` (expected) with `{dest_ty:?}` (found) in `{fn_ptr:?}`"
         );
 
-        autocast(self, fn_ptr, llret, src_ty, dest_ty, false)
+        autocast(self, llret, src_ty, dest_ty)
     }
 
     fn abort(&mut self) {
@@ -911,65 +911,62 @@ fn equate_ty<'ll>(cx: &CodegenCx<'ll, '_>, rust_ty: &'ll Type, llvm_ty: &'ll Typ
 
 fn autocast<'ll>(
     bx: &mut Builder<'_, 'll, '_>,
-    llfn: &'ll Value,
     val: &'ll Value,
     src_ty: &'ll Type,
     dest_ty: &'ll Type,
-    is_argument: bool,
 ) -> &'ll Value {
-    let (rust_ty, llvm_ty) = if is_argument { (src_ty, dest_ty) } else { (dest_ty, src_ty) };
-
-    if rust_ty == llvm_ty {
+    if src_ty == dest_ty {
         return val;
     }
-
-    match bx.type_kind(llvm_ty) {
-        TypeKind::Struct => {
+    match (bx.type_kind(src_ty), bx.type_kind(dest_ty)) {
+        (TypeKind::Struct, TypeKind::Struct) => {
             let mut ret = bx.const_poison(dest_ty);
             for (idx, (src_element_ty, dest_element_ty)) in
                 iter::zip(bx.struct_element_types(src_ty), bx.struct_element_types(dest_ty))
                     .enumerate()
             {
                 let elt = bx.extract_value(val, idx as u64);
-                let casted_elt =
-                    autocast(bx, llfn, elt, src_element_ty, dest_element_ty, is_argument);
+                let casted_elt = autocast(bx, elt, src_element_ty, dest_element_ty);
                 ret = bx.insert_value(ret, casted_elt, idx as u64);
             }
             ret
         }
-        TypeKind::Vector if bx.element_type(llvm_ty) == bx.type_i1() => {
-            let vector_length = bx.vector_length(llvm_ty) as u64;
+        // cast from the i1xN vector type to the primitive type
+        (TypeKind::Vector, _) if bx.element_type(src_ty) == bx.type_i1() => {
+            let vector_length = bx.vector_length(src_ty) as u64;
             let int_width = vector_length.next_power_of_two().max(8);
-
-            if is_argument {
-                let bitcasted = bx.bitcast(val, bx.type_vector(bx.type_i1(), int_width));
-                if vector_length == int_width {
-                    bitcasted
-                } else {
-                    let shuffle_mask: Vec<_> =
-                        (0..vector_length).map(|i| bx.const_i32(i as i32)).collect();
-                    bx.shuffle_vector(bitcasted, bitcasted, bx.const_vector(&shuffle_mask))
-                }
+            let val = if vector_length == int_width {
+                val
             } else {
-                let val = if vector_length != int_width {
-                    let shuffle_indices = match vector_length {
-                        0 => unreachable!("zero length vectors are not allowed"),
-                        1 => vec![0, 1, 1, 1, 1, 1, 1, 1],
-                        2 => vec![0, 1, 2, 3, 2, 3, 2, 3],
-                        3 => vec![0, 1, 2, 3, 4, 5, 3, 4],
-                        4.. => (0..int_width as i32).collect(),
-                    };
-                    let shuffle_mask =
-                        shuffle_indices.into_iter().map(|i| bx.const_i32(i)).collect::<Vec<_>>();
-                    bx.shuffle_vector(val, bx.const_null(src_ty), bx.const_vector(&shuffle_mask))
-                } else {
-                    val
+                // zero-extends vector
+                let shuffle_indices = match vector_length {
+                    0 => unreachable!("zero length vectors are not allowed"),
+                    1 => vec![0, 1, 1, 1, 1, 1, 1, 1],
+                    2 => vec![0, 1, 2, 2, 2, 2, 2, 2],
+                    3 => vec![0, 1, 2, 3, 3, 3, 3, 3],
+                    4.. => (0..int_width as i32).collect(),
                 };
-
-                bx.bitcast(val, dest_ty)
+                let shuffle_mask =
+                    shuffle_indices.into_iter().map(|i| bx.const_i32(i)).collect::<Vec<_>>();
+                bx.shuffle_vector(val, bx.const_null(src_ty), bx.const_vector(&shuffle_mask))
+            };
+            bx.bitcast(val, dest_ty)
+        }
+        // cast from the primitive type to the i1xN vector type
+        (_, TypeKind::Vector) if bx.element_type(dest_ty) == bx.type_i1() => {
+            let vector_length = bx.vector_length(dest_ty) as u64;
+            let int_width = vector_length.next_power_of_two().max(8);
+            let bitcasted = bx.bitcast(val, bx.type_vector(bx.type_i1(), int_width));
+            if vector_length == int_width {
+                bitcasted
+            } else {
+                let shuffle_mask: Vec<_> =
+                    (0..vector_length).map(|i| bx.const_i32(i as i32)).collect();
+                bx.shuffle_vector(bitcasted, bitcasted, bx.const_vector(&shuffle_mask))
             }
         }
-        _ => bx.bitcast(val, dest_ty), // for `bf16(xN)` <-> `u16(xN)`
+        // for `bf16(xN)` <-> `u16(xN)`
+        _ => bx.bitcast(val, dest_ty),
     }
 }
 

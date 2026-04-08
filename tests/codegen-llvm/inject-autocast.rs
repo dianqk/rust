@@ -49,11 +49,11 @@ pub unsafe fn struct_with_i1_vector_autocast(a: i64x2, b: i64x2) -> (u8, u8) {
 
     // CHECK: [[A:%[0-9]+]] = call { <2 x i1>, <2 x i1> } @llvm.x86.avx512.vp2intersect.q.128(<2 x i64> {{.*}}, <2 x i64> {{.*}})
     // CHECK: [[B:%[0-9]+]] = extractvalue { <2 x i1>, <2 x i1> } [[A]], 0
-    // CHECK: [[C:%[0-9]+]] = shufflevector <2 x i1> [[B]], <2 x i1> zeroinitializer, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 2, i32 3, i32 2, i32 3>
+    // CHECK: [[C:%[0-9]+]] = shufflevector <2 x i1> [[B]], <2 x i1> zeroinitializer, <8 x i32> <i32 0, i32 1, i32 2, i32 2, i32 2, i32 2, i32 2, i32 2>
     // CHECK: [[D:%[0-9]+]] = bitcast <8 x i1> [[C]] to i8
     // CHECK: [[E:%[0-9]+]] = insertvalue { i8, i8 } poison, i8 [[D]], 0
     // CHECK: [[F:%[0-9]+]] = extractvalue { <2 x i1>, <2 x i1> } [[A]], 1
-    // CHECK: [[G:%[0-9]+]] = shufflevector <2 x i1> [[F]], <2 x i1> zeroinitializer, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 2, i32 3, i32 2, i32 3>
+    // CHECK: [[G:%[0-9]+]] = shufflevector <2 x i1> [[F]], <2 x i1> zeroinitializer, <8 x i32> <i32 0, i32 1, i32 2, i32 2, i32 2, i32 2, i32 2, i32 2>
     // CHECK: [[H:%[0-9]+]] = bitcast <8 x i1> [[G]] to i8
     // CHECK:                 insertvalue { i8, i8 } [[E]], i8 [[H]], 1
     foo(a, b)
