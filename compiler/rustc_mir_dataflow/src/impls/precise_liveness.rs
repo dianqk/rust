@@ -447,15 +447,24 @@ pub fn liveness_matrix<'tcx>(
         let point = points.point_from_location(location);
         let terminator = block_data.terminator();
 
-        // Kill moved operands if the whole local was moved.
-        VisitPlacesWith(|place: Place<'tcx>, ctxt| {
-            if let PlaceContext::NonMutatingUse(NonMutatingUseContext::Move) = ctxt {
-                if let Some(local) = place.as_local() {
-                    builder.kill(local, point, SplitPointEffect::Early);
+        // Move arguments to a call are treated specially: the place that they
+        // represent is passed directly to the callee, which means that they are
+        // not allowed to alias any other move operand or the destination place.
+        // This is represented here by extending their live range to the late
+        // part, making it overlap with that of the destination place.
+        //
+        // Notably, this *doesn't* apply to TailCall.
+        if !matches!(terminator.kind, mir::TerminatorKind::Call { .. }) {
+            // Kill moved operands if the whole local was moved.
+            VisitPlacesWith(|place: Place<'tcx>, ctxt| {
+                if let PlaceContext::NonMutatingUse(NonMutatingUseContext::Move) = ctxt {
+                    if let Some(local) = place.as_local() {
+                        builder.kill(local, point, SplitPointEffect::Early);
+                    }
                 }
-            }
-        })
-        .visit_terminator(terminator, location);
+            })
+            .visit_terminator(terminator, location);
+        }
 
         // Kill any locals which are no longer used after this terminator.
         for &(local, _) in kill_points.kill_points_map[point] {
@@ -470,31 +479,6 @@ pub fn liveness_matrix<'tcx>(
             DefUse::Use | DefUse::NonUse => {}
         })
         .visit_terminator(terminator, location);
-
-        // Move arguments to a call are treated specially: the place that they
-        // represent is passed directly to the callee, which means that they are
-        // not allowed to alias any other move operand or the destination place.
-        // This is represented here by extending their live range to the late
-        // part, making it overlap with that of the destination place.
-        //
-        // Notably, this *doesn't* apply to TailCall.
-        if let mir::TerminatorKind::Call {
-            func: _,
-            args,
-            destination: _,
-            target: _,
-            unwind: _,
-            call_source: _,
-            fn_span: _,
-        } = &terminator.kind
-        {
-            for arg in args {
-                if let mir::Operand::Move(place) = arg.node {
-                    builder.gen_(place.local, point, SplitPointEffect::Late);
-                    builder.kill(place.local, point, SplitPointEffect::Late);
-                }
-            }
-        }
 
         // End the lifetimes of all locals at the end of the block. Successor
         // blocks (which may not be continuous in the index space!) will
