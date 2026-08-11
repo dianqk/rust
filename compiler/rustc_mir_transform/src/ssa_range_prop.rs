@@ -13,6 +13,7 @@ use rustc_abi::WrappingRange;
 use rustc_const_eval::interpret::Scalar;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::graph::dominators::Dominators;
+use rustc_index::IndexVec;
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::{BasicBlock, Body, Location, Operand, Place, TerminatorKind, *};
@@ -51,6 +52,7 @@ struct RangeSet<'tcx, 'body, 'a> {
     ssa: &'a SsaLocals,
     local_decls: &'body LocalDecls<'tcx>,
     dominators: Dominators<BasicBlock>,
+    assign_ranges: IndexVec<Local, Option<WrappingRange>>,
     /// Known ranges at each locations.
     ranges: FxHashMap<Place<'tcx>, Vec<(Location, WrappingRange)>>,
     /// Determines if the basic block has a single unique predecessor.
@@ -79,6 +81,7 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
             ssa,
             local_decls,
             dominators,
+            assign_ranges: IndexVec::from_elem(None, &body.local_decls),
             ranges: FxHashMap::default(),
             unique_predecessors,
         }
@@ -90,8 +93,27 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         self.ranges.entry(place).or_default().push((location, range));
     }
 
+    fn collect_assign_range(&mut self, local: Local) -> Option<WrappingRange> {
+        let ty = self.local_decls[local].ty;
+        let layout = self.tcx.layout_of(self.typing_env.as_query_input(ty)).ok()?;
+        if !layout.backend_repr.is_scalar() {
+            return None;
+        }
+        if let Some(range) = self.assign_ranges[local] {
+            return Some(range);
+        }
+        // TODO: ..
+        Some(if layout.backend_repr.is_signed() {
+            WrappingRange::full_signed(layout.size)
+        } else {
+            WrappingRange::full(layout.size)
+        })
+    }
+
+    // fn collect_discr_range(&mut self, local: Local) ->
+
     /// Get the known range at the location.
-    fn get_range(&self, place: &Place<'tcx>, location: Location) -> Option<WrappingRange> {
+    fn get_range(&mut self, place: &Place<'tcx>, location: Location) -> Option<WrappingRange> {
         let Some(ranges) = self.ranges.get(place) else {
             return None;
         };

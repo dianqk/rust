@@ -112,6 +112,10 @@ impl SsaLocals {
         matches!(self.assignments[local], Set1::One(_))
     }
 
+    pub(super) fn ssa_define_loc(&self, local: Local) -> Option<DefLocation> {
+        if let Set1::One(def_loc) = self.assignments[local] { Some(def_loc) } else { None }
+    }
+
     /// Return the number of uses if a local that are not "Deref".
     pub(super) fn num_direct_uses(&self, local: Local) -> u32 {
         self.direct_uses[local]

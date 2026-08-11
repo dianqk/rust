@@ -48,6 +48,13 @@ impl WrappingRange {
         })
     }
 
+    pub fn full_signed(size: Size) -> Self {
+        Self {
+            start: (size.signed_int_min() as u128) & size.unsigned_int_max(),
+            end: size.signed_int_max() as u128,
+        }
+    }
+
     pub fn full(size: Size) -> Self {
         Self { start: 0, end: size.unsigned_int_max() }
     }
