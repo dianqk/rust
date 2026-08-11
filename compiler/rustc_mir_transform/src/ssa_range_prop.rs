@@ -9,15 +9,20 @@
 //!   }
 //! }
 //! ```
+use std::cmp::Ordering;
+
+use itertools::Itertools as _;
 use rustc_abi::WrappingRange;
-use rustc_const_eval::interpret::Scalar;
+use rustc_const_eval::const_eval::DummyMachine;
+use rustc_const_eval::interpret::{ImmTy, InterpCx, Scalar};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::graph::dominators::Dominators;
 use rustc_index::IndexVec;
 use rustc_index::bit_set::DenseBitSet;
-use rustc_middle::mir::visit::MutVisitor;
+use rustc_middle::mir::visit::{MutVisitor, Visitor};
 use rustc_middle::mir::{BasicBlock, Body, Location, Operand, Place, TerminatorKind, *};
-use rustc_middle::ty::{TyCtxt, TypingEnv};
+use rustc_middle::ty::util::IntTypeExt;
+use rustc_middle::ty::{self, TyCtxt, TypingEnv};
 use rustc_span::DUMMY_SP;
 
 use crate::PassPolicy;
@@ -33,10 +38,20 @@ impl<'tcx> crate::MirPass<'tcx> for SsaRangePropagation {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let typing_env = body.typing_env(tcx);
         let ssa = SsaLocals::new(tcx, body, typing_env);
+        let mut ssa_assignees =
+            AssignChains { ssa: &ssa, assignees: IndexVec::from_elem(None, &body.local_decls) };
+        ssa_assignees.visit_body(body);
         // Clone dominators because we need them while mutating the body.
         let dominators = body.basic_blocks.dominators().clone();
-        let mut range_set =
-            RangeSet::new(tcx, typing_env, body, &ssa, &body.local_decls, dominators);
+        let mut range_set = RangeSet::new(
+            tcx,
+            typing_env,
+            body,
+            &ssa,
+            &body.local_decls,
+            dominators,
+            ssa_assignees.assignees,
+        );
 
         let reverse_postorder = body.basic_blocks.reverse_postorder().to_vec();
         for bb in reverse_postorder {
@@ -48,10 +63,12 @@ impl<'tcx> crate::MirPass<'tcx> for SsaRangePropagation {
 
 struct RangeSet<'tcx, 'body, 'a> {
     tcx: TyCtxt<'tcx>,
+    ecx: InterpCx<'tcx, DummyMachine>,
     typing_env: TypingEnv<'tcx>,
     ssa: &'a SsaLocals,
     local_decls: &'body LocalDecls<'tcx>,
     dominators: Dominators<BasicBlock>,
+    assignees: IndexVec<Local, Option<(Rvalue<'tcx>, Location)>>,
     assign_ranges: IndexVec<Local, Option<WrappingRange>>,
     /// Known ranges at each locations.
     ranges: FxHashMap<Place<'tcx>, Vec<(Location, WrappingRange)>>,
@@ -67,6 +84,7 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         ssa: &'a SsaLocals,
         local_decls: &'body LocalDecls<'tcx>,
         dominators: Dominators<BasicBlock>,
+        assignees: IndexVec<Local, Option<(Rvalue<'tcx>, Location)>>,
     ) -> Self {
         let predecessors = body.basic_blocks.predecessors();
         let mut unique_predecessors = DenseBitSet::new_empty(body.basic_blocks.len());
@@ -77,10 +95,12 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         }
         RangeSet {
             tcx,
+            ecx: InterpCx::new(tcx, DUMMY_SP, typing_env, DummyMachine),
             typing_env,
             ssa,
             local_decls,
             dominators,
+            assignees,
             assign_ranges: IndexVec::from_elem(None, &body.local_decls),
             ranges: FxHashMap::default(),
             unique_predecessors,
@@ -102,7 +122,34 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         if let Some(range) = self.assign_ranges[local] {
             return Some(range);
         }
-        // TODO: ..
+        let Some((ref rvalue, loc)) = self.assignees[local] else {
+            return None;
+        };
+        let range = match rvalue {
+            Rvalue::Use(_operand, _) => {
+                todo!()
+            }
+            Rvalue::BinaryOp(_bin_op, _) => {
+                todo!()
+            }
+            Rvalue::UnaryOp(_un_op, _operand) => {
+                todo!()
+            }
+            Rvalue::Discriminant(place) => self.collect_discr_range(place),
+            Rvalue::Repeat(_, _)
+            | Rvalue::Ref(_, _, _)
+            | Rvalue::ThreadLocalRef(_)
+            | Rvalue::RawPtr(_, _)
+            | Rvalue::Cast(_, _, _)
+            | Rvalue::Aggregate(_, _)
+            | Rvalue::WrapUnsafeBinder(_, _)
+            | Rvalue::Reborrow(_, _, _) => {
+                return None;
+            }
+            Rvalue::CopyForDeref(_) => todo!(),
+        };
+
+        // TODO: .. use range
         Some(if layout.backend_repr.is_signed() {
             WrappingRange::full_signed(layout.size)
         } else {
@@ -110,7 +157,34 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         })
     }
 
-    // fn collect_discr_range(&mut self, local: Local) ->
+    fn collect_discr_range(&self, place: &Place<'tcx>) -> Option<WrappingRange> {
+        // let ty = place.ty(self.local_decls, self.tcx);
+        // let ty = self.local_decls[local].ty;
+        // let layout = self.tcx.layout_of(self.typing_env.as_query_input(ty)).ok()?;
+        let ty::Adt(adt, _) = place.ty(self.local_decls, self.tcx).ty.kind() else {
+            unreachable!()
+        };
+        if !adt.is_enum() {
+            unreachable!()
+        }
+        let discr_ty = adt.repr().discr_type().to_ty(self.tcx);
+        let discr_layout = self.ecx.layout_of(discr_ty).ok()?;
+        let discrs: Vec<_> = adt
+            .discriminants(self.tcx)
+            .map(|(_, discr)| ImmTy::from_uint(discr.val, discr_layout))
+            .sorted_by(|x, y| {
+                let cmp = self.ecx.binary_op(BinOp::Cmp, x, y).unwrap();
+                let cmp = cmp.to_scalar_int().unwrap().to_i8();
+                match cmp {
+                    -1 => Ordering::Less,
+                    0 => Ordering::Equal,
+                    1 => Ordering::Greater,
+                    _ => unreachable!(),
+                }
+            })
+            .collect();
+        todo!()
+    }
 
     /// Get the known range at the location.
     fn get_range(&mut self, place: &Place<'tcx>, location: Location) -> Option<WrappingRange> {
@@ -229,6 +303,23 @@ impl<'tcx> MutVisitor<'tcx> for RangeSet<'tcx, '_, '_> {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+struct AssignChains<'tcx, 'a> {
+    ssa: &'a SsaLocals,
+    assignees: IndexVec<Local, Option<(Rvalue<'tcx>, Location)>>,
+}
+
+impl<'tcx, 'a> AssignChains<'tcx, 'a> {}
+
+impl<'tcx, 'a> Visitor<'tcx> for AssignChains<'tcx, 'a> {
+    fn visit_assign(&mut self, place: &Place<'tcx>, rvalue: &Rvalue<'tcx>, location: Location) {
+        if let Some(local) = place.as_local()
+            && self.ssa.is_ssa(local)
+        {
+            self.assignees[local] = Some((rvalue.clone(), location));
         }
     }
 }
