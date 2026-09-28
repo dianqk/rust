@@ -157,7 +157,11 @@ impl<'tcx, 'body, 'a> RangeSet<'tcx, 'body, 'a> {
         })
     }
 
-    fn collect_discr_range(&self, place: &Place<'tcx>) -> Option<WrappingRange> {
+    fn collect_discr_range(
+        &self,
+        place: &Place<'tcx>,
+        _location: Location,
+    ) -> Option<WrappingRange> {
         // let ty = place.ty(self.local_decls, self.tcx);
         // let ty = self.local_decls[local].ty;
         // let layout = self.tcx.layout_of(self.typing_env.as_query_input(ty)).ok()?;
@@ -245,6 +249,44 @@ impl<'tcx> MutVisitor<'tcx> for RangeSet<'tcx, '_, '_> {
                 self.insert_range(place, successor, range);
             }
             _ => {}
+        }
+    }
+
+    fn visit_assign(
+        &mut self,
+        place: &mut Place<'tcx>,
+        rvalue: &mut Rvalue<'tcx>,
+        location: Location,
+    ) {
+        // TODO
+        let range = match rvalue {
+            Rvalue::Use(_operand, _) => {
+                todo!()
+            }
+            Rvalue::BinaryOp(_bin_op, _) => {
+                todo!()
+            }
+            Rvalue::UnaryOp(_un_op, _operand) => {
+                todo!()
+            }
+            Rvalue::Discriminant(place) => self.collect_discr_range(place, location),
+            Rvalue::Repeat(_, _)
+            | Rvalue::Ref(_, _, _)
+            | Rvalue::ThreadLocalRef(_)
+            | Rvalue::RawPtr(_, _)
+            | Rvalue::Cast(_, _, _)
+            | Rvalue::Aggregate(_, _)
+            | Rvalue::WrapUnsafeBinder(_, _)
+            | Rvalue::Reborrow(_, _, _) => {
+                // TODO: skip?
+                return;
+            }
+            Rvalue::CopyForDeref(_) => todo!(),
+        };
+        if let Some(range) = range
+            && self.is_ssa(*place)
+        {
+            self.insert_range(*place, location, range);
         }
     }
 
