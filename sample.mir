@@ -12,36 +12,30 @@ fn indirect_deref_1(_1: &(&i32, i32), _2: fn(i32, i32), _3: fn()) -> () {
     let _7: ();
     let _8: ();
     let mut _9: i32;
-    let mut _10: i32;
+    let mut _10: &i32;
     let mut _11: &i32;
-    let mut _12: &i32;
 
     bb0: {
         StorageLive(_5);
-        _11 = no_retag copy ((*_1).0: &i32);
-        _5 = copy (*_11);
-        StorageLive(_6);
+        _10 = no_retag copy ((*_1).0: &i32);
+        _5 = copy (*_10);
         _6 = copy ((*_1).1: i32);
-        _4 = copy _2(move _5, move _6) -> [return: bb1, unwind continue];
+        _4 = copy _2(move _5, copy _6) -> [return: bb1, unwind continue];
     }
 
     bb1: {
-        StorageDead(_6);
         StorageDead(_5);
         _7 = copy _3() -> [return: bb2, unwind continue];
     }
 
     bb2: {
         StorageLive(_9);
-        _12 = no_retag copy ((*_1).0: &i32);
-        _9 = copy (*_12);
-        StorageLive(_10);
-        _10 = copy ((*_1).1: i32);
-        _8 = copy _2(move _9, move _10) -> [return: bb3, unwind continue];
+        _11 = no_retag copy ((*_1).0: &i32);
+        _9 = copy (*_11);
+        _8 = copy _2(move _9, move _6) -> [return: bb3, unwind continue];
     }
 
     bb3: {
-        StorageDead(_10);
         StorageDead(_9);
         return;
     }
@@ -58,28 +52,36 @@ fn direct_deref_2(_1: (&i32, i32), _2: fn(i32, i32), _3: fn()) -> () {
     let mut _7: i32;
     let _8: ();
     let _9: ();
-    let mut _10: &i32;
+    let mut _10: i32;
+    let mut _11: &i32;
+    let mut _12: &i32;
     scope 1 {
         debug x => _4;
     }
 
     bb0: {
         // DBG: _4 = &_1;
-        _10 = no_retag copy (_1.0: &i32);
-        _6 = copy (*_10);
+        StorageLive(_6);
+        _11 = no_retag copy (_1.0: &i32);
+        _6 = copy (*_11);
         _7 = copy (_1.1: i32);
-        _5 = copy _2(copy _6, copy _7) -> [return: bb1, unwind continue];
+        _5 = copy _2(move _6, copy _7) -> [return: bb1, unwind continue];
     }
 
     bb1: {
+        StorageDead(_6);
         _8 = copy _3() -> [return: bb2, unwind continue];
     }
 
     bb2: {
-        _9 = copy _2(move _6, move _7) -> [return: bb3, unwind continue];
+        StorageLive(_10);
+        _12 = no_retag copy (_1.0: &i32);
+        _10 = copy (*_12);
+        _9 = copy _2(move _10, move _7) -> [return: bb3, unwind continue];
     }
 
     bb3: {
+        StorageDead(_10);
         return;
     }
 }

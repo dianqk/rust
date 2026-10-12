@@ -829,7 +829,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
     ) -> Option<(PlaceTy<'tcx>, VnIndex)> {
         let projection_ty = place_ty.projection_ty(self.tcx, proj);
         if projection_ty.ty.is_ref() {
-          return None;
+            return None;
         }
 
         let proj = match proj {
@@ -2047,17 +2047,18 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
                 && (allow_complex_projection || proj.is_stable_offset())
                 && let Some(proj) = self.try_as_place_elem(self.ty(index), proj, loc)
             {
-                if proj == PlaceElem::Deref {
-                    // We can introduce a new dereference if the source value cannot be changed in the body.
-                    // Dereferencing an immutable argument always gives the same value in the body.
-                    match self.get(pointer) {
-                        Value::Argument(_)
-                            if let Some(Mutability::Not) = self.ty(pointer).ref_mutability() => {}
-                        _ => {
-                            return None;
-                        }
-                    }
-                }
+                // probably is_stable_offset can be removed.
+                // if proj == PlaceElem::Deref {
+                // We can introduce a new dereference if the source value cannot be changed in the body.
+                // Dereferencing an immutable argument always gives the same value in the body.
+                //    match self.get(pointer) {
+                //       Value::Argument(_)
+                //           if let Some(Mutability::Not) = self.ty(pointer).ref_mutability() => {}
+                //       _ => {
+                //          return None;
+                //      }
+                //   }
+                // }
                 projection.push(proj);
                 index = pointer;
             } else {
@@ -2072,7 +2073,13 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
         let other = self.rev_locals.get(index)?;
         other
             .iter()
-            .find(|&&other| self.ssa.assignment_dominates(&self.dominators, other, loc))
+            .find(|&&other| {
+                if !self.ssa.assignment_dominates(&self.dominators, other, loc) {
+                    return false;
+                }
+                // TODO: check other is not ty_may_have_ref.
+                return true;
+            })
             .copied()
     }
 }
