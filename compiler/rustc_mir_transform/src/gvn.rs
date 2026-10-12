@@ -828,6 +828,10 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         proj: ProjectionElem<VnIndex, Ty<'tcx>>,
     ) -> Option<(PlaceTy<'tcx>, VnIndex)> {
         let projection_ty = place_ty.projection_ty(self.tcx, proj);
+        if projection_ty.ty.is_ref() {
+          return None;
+        }
+
         let proj = match proj {
             ProjectionElem::Deref => {
                 if let Some(Mutability::Not) = place_ty.ty.ref_mutability()
@@ -851,9 +855,10 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                     // because nested shared references are not read-only.
                     // For more, see <https://github.com/rust-lang/rust/issues/155884> and
                     // <https://github.com/rust-lang/rust/issues/130853>.
-                    if self.ty_may_have_ref(projection_ty.ty) {
-                        return None;
-                    }
+                    // if self.ty_may_have_ref(projection_ty.ty) {
+                    // if projection_ty.ty.is_ref() {
+                    //    return None;
+                    //}
 
                     // An immutable borrow `_x` always points to the same value for the
                     // lifetime of the borrow, so we can merge all instances of `*_x`.
