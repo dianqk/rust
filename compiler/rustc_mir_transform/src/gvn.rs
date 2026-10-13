@@ -146,7 +146,7 @@ impl<'tcx> crate::MirPass<'tcx> for GVN {
             VnState::new(tcx, body, typing_env, &ssa, dominators, &body.local_decls, &arena);
 
         for local in body.args_iter().filter(|&local| ssa.is_ssa(local)) {
-            let opaque = state.new_argument(body.local_decls[local].ty);
+            let opaque = state.new_opaque(body.local_decls[local].ty);
             state.assign(local, opaque);
         }
 
@@ -231,8 +231,6 @@ enum Value<'a, 'tcx> {
     // Root values.
     /// Used to represent values we know nothing about.
     Opaque(VnOpaque),
-    /// The value is a argument.
-    Argument(VnOpaque),
     /// Evaluated or unevaluated constant value.
     Constant {
         value: Const<'tcx>,
@@ -317,7 +315,7 @@ impl<'a, 'tcx> ValueSet<'a, 'tcx> {
         let value = value(VnOpaque);
 
         debug_assert!(match value {
-            Value::Opaque(_) | Value::Argument(_) | Value::Address { .. } => true,
+            Value::Opaque(_) | Value::Address { .. } => true,
             Value::Constant { disambiguator, .. } => disambiguator.is_some(),
             _ => false,
         });
@@ -475,13 +473,6 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         index
     }
 
-    #[instrument(level = "trace", skip(self), ret)]
-    fn new_argument(&mut self, ty: Ty<'tcx>) -> VnIndex {
-        let index = self.insert_unique(ty, Value::Argument);
-        self.evaluated[index] = Some(None);
-        index
-    }
-
     /// Create a new `Value::Address` distinct from all the others.
     #[instrument(level = "trace", skip(self), ret)]
     fn new_pointer(&mut self, place: Place<'tcx>, kind: AddressKind) -> Option<VnIndex> {
@@ -584,7 +575,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         let op = match self.get(value) {
             _ if ty.is_zst() => ImmTy::uninit(ty).into(),
 
-            Opaque(_) | Argument(_) => return None,
+            Opaque(_) => return None,
             // Keep runtime check constants as symbolic.
             RuntimeChecks(..) => return None,
 
@@ -828,11 +819,10 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         place_ty: PlaceTy<'tcx>,
         value: VnIndex,
         proj: ProjectionElem<VnIndex, Ty<'tcx>>,
-        allow_ref: bool,
-    ) -> Option<(PlaceTy<'tcx>, VnIndex, bool)> {
+    ) -> Option<(PlaceTy<'tcx>, VnIndex)> {
         let projection_ty = place_ty.projection_ty(self.tcx, proj);
         // TODO: value should be known from address.
-        if projection_ty.ty.is_ref() && !allow_ref && !proj.is_stable_offset() {
+        if projection_ty.ty.is_ref() && !proj.is_stable_offset() {
             return None;
         }
 
@@ -868,7 +858,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                     // lifetime of the borrow, so we can merge all instances of `*_x`.
                     let deref = self
                         .insert(projection_ty.ty, Value::Projection(value, ProjectionElem::Deref));
-                    return Some((projection_ty, deref, !self.ty_may_have_ref(projection_ty.ty)));
+                    return Some((projection_ty, deref));
                 } else {
                     return None;
                 }
@@ -2070,9 +2060,9 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
                     return false;
                 }
                 if self.ty_may_have_ref(self.local_decls[other].ty) {
-                    // We can introduce a new reference when the reference is valid on the new
-                    // location.
-                    // If the reference as an argument, it is valid on the whole body.
+                    // We can introduce a new reference when the new location in the lifetime of the
+                    // reference.
+                    // If the reference as an argument, it's lifetime is on the whole body.
                     if (1..=self.arg_count).contains(&other.as_usize()) {
                         return true;
                     }
