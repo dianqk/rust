@@ -813,6 +813,38 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         Some(value)
     }
 
+    fn is_safe_to_use_ref(&self, mut value: VnIndex) -> bool {
+        loop {
+            match self.get(value) {
+                Value::Opaque(_) => {
+                    return !self.ty_may_have_ref(self.ty(value));
+                }
+                Value::Constant { .. } => {
+                    return true;
+                }
+                Value::Projection(vn_index, projection_elem) => {
+                    // TODO: correct? is_stable_offset?
+                    if !projection_elem.is_stable_offset() {
+                        return false;
+                    }
+                    value = vn_index;
+                }
+                Value::Aggregate(..)
+                | Value::Union(..)
+                | Value::RawPtr { .. }
+                | Value::Repeat(..)
+                | Value::Address { .. }
+                | Value::Discriminant(..)
+                | Value::RuntimeChecks(..)
+                | Value::UnaryOp(..)
+                | Value::BinaryOp(..)
+                | Value::Cast { .. } => {
+                    return false;
+                }
+            }
+        }
+    }
+
     #[instrument(level = "trace", skip(self), ret)]
     fn project(
         &mut self,
@@ -821,8 +853,23 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         proj: ProjectionElem<VnIndex, Ty<'tcx>>,
     ) -> Option<(PlaceTy<'tcx>, VnIndex)> {
         let projection_ty = place_ty.projection_ty(self.tcx, proj);
-        // TODO: value should be known from address.
-        if projection_ty.ty.is_ref() && !proj.is_stable_offset() {
+        // TODO: update docs.
+        // We cannot unify two references produced by dereferencing the same nested reference,
+        // because they may have different lifetimes.
+        // ```
+        // let b: &T = *a;
+        // ... `a` is allowed to be modified. `c` and `b` have different borrowing lifetime.
+        // Unifying them will extend the lifetime of `b`.
+        // let c: &T = *a;
+        // ```
+        // Furthermore, unifying them can also violate Stacked Borrows or Tree Borrows.
+        // We can only unify all `*b` and `*c` separately
+        // because nested shared references are not read-only.
+        // For more, see <https://github.com/rust-lang/rust/issues/155884> and
+        // <https://github.com/rust-lang/rust/issues/130853>.
+        if projection_ty.ty.is_ref()
+            && (!proj.is_stable_offset() || !self.is_safe_to_use_ref(value))
+        {
             return None;
         }
 
@@ -836,26 +883,9 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                     {
                         return Some((projection_ty, value));
                     }
-                    // TODO: update docs.
-                    // We cannot unify two references produced by dereferencing the same nested reference,
-                    // because they may have different lifetimes.
-                    // ```
-                    // let b: &T = *a;
-                    // ... `a` is allowed to be modified. `c` and `b` have different borrowing lifetime.
-                    // Unifying them will extend the lifetime of `b`.
-                    // let c: &T = *a;
-                    // ```
-                    // Furthermore, unifying them can also violate Stacked Borrows or Tree Borrows.
-                    // We can only unify all `*b` and `*c` separately
-                    // because nested shared references are not read-only.
-                    // For more, see <https://github.com/rust-lang/rust/issues/155884> and
-                    // <https://github.com/rust-lang/rust/issues/130853>.
-                    if projection_ty.ty.is_ref() {
-                        return None;
-                    }
 
                     // An immutable borrow `_x` always points to the same value for the
-                    // lifetime of the borrow, so we can merge all instances of `*_x`.
+                    // lifetime of the borrow, so we can unify all instances of `*_x`.
                     let deref = self
                         .insert(projection_ty.ty, Value::Projection(value, ProjectionElem::Deref));
                     return Some((projection_ty, deref));
