@@ -383,6 +383,7 @@ struct VnState<'body, 'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     ecx: InterpCx<'tcx, DummyMachine>,
     local_decls: &'body LocalDecls<'tcx>,
+    arg_count: usize,
     is_coroutine: bool,
     /// Value stored in each local.
     locals: IndexVec<Local, Option<VnIndex>>,
@@ -422,6 +423,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
             tcx,
             ecx: InterpCx::new(tcx, DUMMY_SP, typing_env, DummyMachine),
             local_decls,
+            arg_count: body.arg_count,
             is_coroutine: body.coroutine.is_some(),
             locals: IndexVec::from_elem(None, local_decls),
             rev_locals: IndexVec::with_capacity(num_values),
@@ -826,9 +828,11 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
         place_ty: PlaceTy<'tcx>,
         value: VnIndex,
         proj: ProjectionElem<VnIndex, Ty<'tcx>>,
-    ) -> Option<(PlaceTy<'tcx>, VnIndex)> {
+        allow_ref: bool,
+    ) -> Option<(PlaceTy<'tcx>, VnIndex, bool)> {
         let projection_ty = place_ty.projection_ty(self.tcx, proj);
-        if projection_ty.ty.is_ref() {
+        // TODO: value should be known from address.
+        if projection_ty.ty.is_ref() && !allow_ref && !proj.is_stable_offset() {
             return None;
         }
 
@@ -842,6 +846,7 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                     {
                         return Some((projection_ty, value));
                     }
+                    // TODO: update docs.
                     // We cannot unify two references produced by dereferencing the same nested reference,
                     // because they may have different lifetimes.
                     // ```
@@ -855,16 +860,15 @@ impl<'body, 'a, 'tcx> VnState<'body, 'a, 'tcx> {
                     // because nested shared references are not read-only.
                     // For more, see <https://github.com/rust-lang/rust/issues/155884> and
                     // <https://github.com/rust-lang/rust/issues/130853>.
-                    // if self.ty_may_have_ref(projection_ty.ty) {
-                    // if projection_ty.ty.is_ref() {
-                    //    return None;
-                    //}
+                    if projection_ty.ty.is_ref() {
+                        return None;
+                    }
 
                     // An immutable borrow `_x` always points to the same value for the
                     // lifetime of the borrow, so we can merge all instances of `*_x`.
                     let deref = self
                         .insert(projection_ty.ty, Value::Projection(value, ProjectionElem::Deref));
-                    return Some((projection_ty, deref));
+                    return Some((projection_ty, deref, !self.ty_may_have_ref(projection_ty.ty)));
                 } else {
                     return None;
                 }
@@ -2047,18 +2051,6 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
                 && (allow_complex_projection || proj.is_stable_offset())
                 && let Some(proj) = self.try_as_place_elem(self.ty(index), proj, loc)
             {
-                // probably is_stable_offset can be removed.
-                // if proj == PlaceElem::Deref {
-                // We can introduce a new dereference if the source value cannot be changed in the body.
-                // Dereferencing an immutable argument always gives the same value in the body.
-                //    match self.get(pointer) {
-                //       Value::Argument(_)
-                //           if let Some(Mutability::Not) = self.ty(pointer).ref_mutability() => {}
-                //       _ => {
-                //          return None;
-                //      }
-                //   }
-                // }
                 projection.push(proj);
                 index = pointer;
             } else {
@@ -2077,7 +2069,15 @@ impl<'tcx> VnState<'_, '_, 'tcx> {
                 if !self.ssa.assignment_dominates(&self.dominators, other, loc) {
                     return false;
                 }
-                // TODO: check other is not ty_may_have_ref.
+                if self.ty_may_have_ref(self.local_decls[other].ty) {
+                    // We can introduce a new reference when the reference is valid on the new
+                    // location.
+                    // If the reference as an argument, it is valid on the whole body.
+                    if (1..=self.arg_count).contains(&other.as_usize()) {
+                        return true;
+                    }
+                    return false;
+                }
                 return true;
             })
             .copied()
