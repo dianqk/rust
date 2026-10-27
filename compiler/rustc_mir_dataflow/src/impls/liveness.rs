@@ -242,6 +242,7 @@ impl<'a> MaybeTransitiveLiveLocals<'a> {
             StatementKind::FakeRead(_)
             | StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
+            | StatementKind::StorageAlloc(_)
             | StatementKind::AscribeUserType(..)
             | StatementKind::PlaceMention(..)
             | StatementKind::Coverage(..)
